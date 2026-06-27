@@ -55,7 +55,7 @@ jobs:
           mkdir -p _site
           cp engagement-dashboard.html _site/index.html
           cp engagement-data.js _site/engagement-data.js
-          cp favicon.svg _site/favicon.svg
+          cp favicon.png _site/favicon.png
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
