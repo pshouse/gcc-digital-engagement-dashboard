@@ -1,0 +1,66 @@
+name: Refresh dashboard
+
+# Runs in GitHub's cloud (which has internet), pulls fresh data from every
+# platform, and publishes the dashboard to GitHub Pages. No local PC needed.
+
+on:
+  schedule:
+    - cron: "0 11 * * 1"      # every Monday ~11:00 UTC (about 6-7am US Eastern)
+  workflow_dispatch: {}         # also lets you run it on demand from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install google-analytics-data google-auth google-auth-oauthlib google-api-python-client requests
+
+      - name: Write credential files from secrets
+        env:
+          CONFIG_JSON: ${{ secrets.CONFIG_JSON }}
+          GCC_SERVICE_ACCOUNT_JSON: ${{ secrets.GCC_SERVICE_ACCOUNT_JSON }}
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+        run: |
+          printf '%s' "$CONFIG_JSON" > config.json
+          printf '%s' "$GCC_SERVICE_ACCOUNT_JSON" > gcc-service-account.json
+          printf '%s' "$YOUTUBE_TOKEN_JSON" > youtube_token.json
+
+      - name: Fetch latest engagement data
+        env:
+          DASHBOARD_HEADLESS: "1"
+        run: python fetch_engagement.py
+
+      - name: Assemble the site
+        run: |
+          mkdir -p _site
+          cp engagement-dashboard.html _site/index.html
+          cp engagement-data.js _site/engagement-data.js
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

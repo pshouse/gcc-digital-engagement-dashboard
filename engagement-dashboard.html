@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gaston Community Church — Digital Engagement Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js" integrity="sha384-iU8HYtnGQ8Cy4zl7gbNMOhsDTTKX02BTXptVP/vqAWIaTfM7isw76iyZCsjL2eVi" crossorigin="anonymous"></script>
+<!-- Real data, written by fetch_engagement.py. Optional: absent in preview. -->
+<script src="engagement-data.js" onerror="window.__noData=true"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --ink: #1a1d21;
+    --muted: #6b7280;
+    --line: #e6e8eb;
+    --web: #0d9488;
+    --ig: #d6249f;
+    --fb: #1877f2;
+    --yt: #ff0000;
+    --good: #16a34a;
+    --bad: #dc2626;
+    --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.1);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 20px 56px; }
+  header.top { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .sub a { color: var(--web); text-decoration: none; }
+  .sub a:hover { text-decoration: underline; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  select { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
+
+  .banner {
+    margin: 16px 0 22px; padding: 14px 16px; border-radius: 12px;
+    background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412;
+    font-size: 13.5px; line-height: 1.5; display: flex; gap: 12px; align-items: flex-start;
+  }
+  .banner.connected { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
+  .banner b { font-weight: 600; }
+  .banner .dot { width: 9px; height: 9px; border-radius: 50%; background: #f59e0b; margin-top: 5px; flex: 0 0 auto; }
+  .banner.connected .dot { background: var(--good); }
+
+  .grid { display: grid; gap: 14px; }
+  .kpis { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px) { .kpis { grid-template-columns: 1fr; } }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 16px; }
+  .kpi .label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); font-weight: 500; }
+  .kpi .chan { width: 8px; height: 8px; border-radius: 50%; }
+  .kpi .value { font-size: 26px; font-weight: 700; margin: 8px 0 2px; letter-spacing: -.02em; }
+  .kpi .value.dim { color: var(--muted); font-weight: 600; font-size: 20px; }
+  .kpi .delta { font-size: 12.5px; font-weight: 600; }
+  .kpi .delta.up { color: var(--good); }
+  .kpi .delta.down { color: var(--bad); }
+  .kpi .delta.off { color: var(--muted); font-weight: 500; }
+  .kpi .delta span { color: var(--muted); font-weight: 500; }
+
+  .section-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 26px 0 12px; }
+
+  .two { grid-template-columns: 1.6fr 1fr; }
+  @media (max-width: 880px) { .two { grid-template-columns: 1fr; } }
+  .chart-card h3 { margin: 0 0 2px; font-size: 15px; }
+  .chart-card .hint { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+  .chart-box { position: relative; height: 300px; }
+  .chart-box.sm { height: 260px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
+  .legend span { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.note { color: var(--muted); font-style: italic; }
+  .pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; display: inline-block; }
+  .pill.web { background: #ccfbf1; color: #115e59; }
+  .pill.ig { background: #fce7f3; color: #9d174d; }
+  .pill.fb { background: #dbeafe; color: #1e3a8a; }
+  .pill.yt { background: #fee2e2; color: #991b1b; }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 26px; line-height: 1.5; }
+  .hidden { display: none; }
+  .tip { cursor: help; }
+  h3.tip, th.tip { text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: #c7ccd1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Gaston Community Church — Digital Engagement</h1>
+      <div class="sub">
+        <a href="https://gastoncommunitychurch.com" target="_blank" rel="noopener">Website</a> &middot;
+        <a href="https://www.instagram.com/gaston_community_church" target="_blank" rel="noopener">Instagram</a> &middot;
+        <a href="https://www.facebook.com/GastonCommunityChurch/" target="_blank" rel="noopener">Facebook</a> &middot;
+        <a href="https://www.youtube.com/@gastoncommunitychurch6944" target="_blank" rel="noopener">YouTube</a>
+      </div>
+    </div>
+    <div class="controls">
+      <select id="range">
+        <option value="7">Last 7 days</option>
+        <option value="28" selected>Last 28 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+    </div>
+  </header>
+
+  <div class="section-title">Total engagement &amp; reach</div>
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="section-title">Engagement over time</div>
+  <div class="grid two">
+    <div class="card chart-card">
+      <h3 class="tip" title="Daily interactions only: website engaged sessions plus social likes, comments, shares and reactions. Views are NOT counted here.">Engagement actions by channel</h3>
+      <div class="hint">Website engaged sessions and social likes, comments, shares &amp; reactions per day</div>
+      <div class="chart-box"><canvas id="trend"></canvas></div>
+    </div>
+    <div class="card chart-card">
+      <h3 class="tip" title="Each channel's share of total interactions (likes, comments, shares, reactions). Based on engagement, not views.">Share of total engagement</h3>
+      <div class="hint">Where your audience is interacting</div>
+      <div class="chart-box sm"><canvas id="share"></canvas></div>
+      <div class="legend" id="shareLegend"></div>
+    </div>
+  </div>
+
+  <div id="searchSection" class="hidden">
+    <div class="section-title">Google Search visibility</div>
+    <div class="grid two">
+      <div class="card chart-card">
+        <h3 class="tip" title="How often your church shows up in Google Search (impressions) and how often people click through to your site (clicks).">Search clicks &amp; impressions</h3>
+        <div class="hint" id="searchTotals">How your church appears in Google Search</div>
+        <div class="chart-box sm"><canvas id="searchChart"></canvas></div>
+      </div>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Top search queries</th>
+              <th class="num tip" title="Times someone clicked your site after this search.">Clicks</th>
+              <th class="num tip" title="Times your site appeared in results for this search.">Impr.</th>
+              <th class="num tip" title="Average position in Google results (1 = very top).">Avg pos.</th>
+            </tr>
+          </thead>
+          <tbody id="searchQueries"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="growthSection">
+    <div class="section-title">Audience growth</div>
+    <div class="card chart-card">
+      <h3>Followers &amp; subscribers</h3>
+      <div class="hint">Cumulative audience across connected social channels</div>
+      <div class="chart-box sm"><canvas id="growth"></canvas></div>
+    </div>
+  </div>
+
+  <div class="section-title">Top performing content</div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Content</th>
+          <th>Channel</th>
+          <th class="num tip" title="Reach — how many unique people saw it. For website pages this is the page-view count.">Reach</th>
+          <th class="num tip" title="Engagement — interactions: likes, comments, shares and reactions. For website pages this is engaged sessions.">Engagement</th>
+          <th class="num tip" title="Engagement rate — engagement divided by reach, as a percentage.">Eng. rate</th>
+        </tr>
+      </thead>
+      <tbody id="topContent"></tbody>
+    </table>
+  </div>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const COLORS = { web: "#0d9488", ig: "#d6249f", fb: "#1877f2", yt: "#ff0000" };
+  const NAMES  = { web: "Website", ig: "Instagram", fb: "Facebook", yt: "YouTube" };
+  const TIPS = {
+    web: "Engaged sessions — visits where someone actively used your site (scrolled, clicked, or stayed 10+ seconds). Source: Google Analytics.",
+    ig:  "Instagram engagement — total likes + comments across your Instagram posts in this period.",
+    fb:  "Facebook engagement — total reactions + comments + shares across your Facebook posts and Reels in this period.",
+    yt:  "YouTube views — total times your videos were watched in this period (all videos combined). The smaller line shows likes + comments.",
+  };
+  const fmt = new Intl.NumberFormat("en-US");
+  const charts = {};
+  const sum = a => a.reduce((x, y) => x + y, 0);
+  const half = a => { const h = Math.floor(a.length / 2); return [sum(a.slice(0, h)), sum(a.slice(h))]; };
+  const delta = a => { const [p, c] = half(a); return p === 0 ? 0 : ((c - p) / p) * 100; };
+
+  // -------------------------------------------------------------------------
+  // SAMPLE DATA (preview when no engagement-data.js is present)
+  // -------------------------------------------------------------------------
+  function days(n) {
+    const out = []; const today = new Date();
+    for (let i = n - 1; i >= 0; i--) { const d = new Date(today); d.setDate(today.getDate() - i); out.push(d); }
+    return out;
+  }
+  function seed(n, base, vol, trend) {
+    const a = []; let v = base;
+    for (let i = 0; i < n; i++) { v += (Math.sin(i / 3) * vol * 0.4) + (Math.random() - 0.5) * vol + trend; a.push(Math.max(0, Math.round(v))); }
+    return a;
+  }
+  function buildSample(rangeDays) {
+    const dates = days(rangeDays); const n = dates.length;
+    const series = { web: seed(n,1400,180,6), ig: seed(n,820,140,5), fb: seed(n,430,90,1), yt: seed(n,360,80,3) };
+    return {
+      mode: "sample", dates, series,
+      live: { web: true, ig: true, fb: true, yt: true },
+      kpis: [
+        { key: "web", label: "Website engaged sessions", value: sum(series.web), delta: delta(series.web), live: true },
+        { key: "ig",  label: "Instagram engagement",      value: sum(series.ig),  delta: delta(series.ig),  live: true },
+        { key: "fb",  label: "Facebook engagement",       value: sum(series.fb),  delta: delta(series.fb),  live: true },
+        { key: "yt",  label: "YouTube views & engagement",value: sum(series.yt),  delta: delta(series.yt),  live: true },
+      ],
+      growth: { ig: seed(n,18400,30,22), fb: seed(n,9600,15,6), yt: seed(n,12300,18,14) },
+      topContent: [
+        { title: "Sunday sermon: “Hope That Holds”", chan: "yt", reach: 4820, eng: 740 },
+        { title: "Reel: Baptism Sunday highlights", chan: "ig", reach: 6100, eng: 980 },
+        { title: "Small Groups signup announcement", chan: "fb", reach: 3870, eng: 540 },
+        { title: "GriefShare ministry page", chan: "web", reach: 1820, eng: 240 },
+        { title: "Youth & Kids summer event post", chan: "ig", reach: 2600, eng: 410 },
+        { title: "Worship Leader opening", chan: "web", reach: 1430, eng: 190 },
+      ],
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // LIVE DATA adapter (from window.ENGAGEMENT_DATA written by fetch_engagement.py)
+  // -------------------------------------------------------------------------
+  function buildFromLive(raw, rangeDays) {
+    const all = raw.dates.map(s => new Date(s + "T00:00:00"));
+    const n = all.length;
+    const start = Math.max(0, n - rangeDays);
+    const dates = all.slice(start);
+    const ch = raw.channels || {};
+    const zero = () => new Array(dates.length).fill(0);
+    const slice = (obj, key) => (obj && obj[key]) ? obj[key].slice(start) : null;
+
+    const live = { web: !!ch.web, ig: !!ch.ig, fb: !!ch.fb, yt: !!ch.yt };
+    const series = {
+      web: slice(ch.web, "engaged_sessions") || zero(),
+      ig:  slice(ch.ig, "engagement") || zero(),
+      fb:  slice(ch.fb, "engagement") || zero(),
+      yt:  slice(ch.yt, "engagement") || zero(),
+    };
+    const ytViews = slice(ch.yt, "views"); // YouTube headline metric
+
+    const kpis = [
+      { key: "web", label: "Website engaged sessions", value: sum(series.web), delta: delta(series.web), live: live.web },
+      { key: "ig",  label: "Instagram engagement",      value: sum(series.ig),  delta: delta(series.ig),  live: live.ig },
+      { key: "fb",  label: "Facebook engagement",       value: sum(series.fb),  delta: delta(series.fb),  live: live.fb },
+      { key: "yt",  label: "YouTube views",
+        value: ytViews ? sum(ytViews) : sum(series.yt),
+        delta: ytViews ? delta(ytViews) : delta(series.yt), live: live.yt,
+        secondary: ytViews
+          ? (((ch.yt && ch.yt.subscriber_count != null) ? fmt.format(ch.yt.subscriber_count) + " subscribers · " : "")
+             + fmt.format(sum(series.yt)) + " likes & comments")
+          : null },
+    ];
+
+    // No reliable historical follower/subscriber series from the APIs, so the
+    // Audience-growth chart is hidden for live data (it only renders for the sample).
+    const growth = null;
+
+    const topContent = (raw.top_content && raw.top_content.length)
+      ? raw.top_content.map(t => ({ title: t.title, chan: t.chan, reach: t.reach, eng: t.eng }))
+      : null;
+
+    return { mode: "live", generated_at: raw.generated_at, dates, series, live, kpis, growth, topContent };
+  }
+
+  function loadData(rangeDays) {
+    if (window.ENGAGEMENT_DATA && window.ENGAGEMENT_DATA.channels &&
+        Object.keys(window.ENGAGEMENT_DATA.channels).length > 0) {
+      return buildFromLive(window.ENGAGEMENT_DATA, rangeDays);
+    }
+    return buildSample(rangeDays);
+  }
+
+  // -------------------------------------------------------------------------
+  // RENDER
+  // -------------------------------------------------------------------------
+  function renderKPIs(data) {
+    document.getElementById("kpis").innerHTML = data.kpis.map(k => {
+      const tip = TIPS[k.key] || "";
+      const label = `<div class="label tip" title="${tip}"><span class="chan" style="background:${COLORS[k.key]}"></span>${k.label}</div>`;
+      if (k.live === false) {
+        return `<div class="card kpi">
+          ${label}
+          <div class="value dim">&mdash;</div>
+          <div class="delta off">Not connected yet</div>
+        </div>`;
+      }
+      const up = k.delta >= 0;
+      return `<div class="card kpi">
+        ${label}
+        <div class="value">${fmt.format(k.value)}</div>
+        <div class="delta ${up ? "up" : "down"}">${up ? "▲" : "▼"} ${Math.abs(k.delta).toFixed(1)}% <span>vs prior period</span></div>
+        ${k.secondary ? `<div class="delta off" style="margin-top:4px">${k.secondary}</div>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  function activeKeys(data) {
+    return Object.keys(data.series).filter(k => data.mode === "sample" || (data.live && data.live[k]));
+  }
+
+  function renderTrend(data) {
+    const ctx = document.getElementById("trend");
+    if (charts.trend) charts.trend.destroy();
+    const labels = data.dates.map(d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+    const keys = activeKeys(data);
+    charts.trend = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets: keys.map(k => ({
+        label: NAMES[k], data: data.series[k],
+        borderColor: COLORS[k], backgroundColor: COLORS[k] + "20",
+        borderWidth: 2, tension: .35, pointRadius: 0, fill: false,
+      })) },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "bottom", labels: { boxWidth: 10, usePointStyle: true, font: { size: 12 } } } },
+        scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 11 } } },
+                  y: { grid: { color: "#eef0f3" }, ticks: { font: { size: 11 } } } },
+      },
+    });
+  }
+
+  function renderShare(data) {
+    const ctx = document.getElementById("share");
+    if (charts.share) charts.share.destroy();
+    const keys = activeKeys(data).filter(k => sum(data.series[k]) > 0);
+    const totals = keys.map(k => sum(data.series[k]));
+    const grand = totals.reduce((a, b) => a + b, 0) || 1;
+    charts.share = new Chart(ctx, {
+      type: "doughnut",
+      data: { labels: keys.map(k => NAMES[k]), datasets: [{ data: totals, backgroundColor: keys.map(k => COLORS[k]), borderWidth: 2, borderColor: "#fff" }] },
+      options: { responsive: true, maintainAspectRatio: false, cutout: "62%", plugins: { legend: { display: false } } },
+    });
+    document.getElementById("shareLegend").innerHTML = keys.map((k, i) =>
+      `<span><i style="background:${COLORS[k]}"></i>${NAMES[k]} ${((totals[i] / grand) * 100).toFixed(0)}%</span>`).join("");
+  }
+
+  function renderGrowth(data) {
+    const section = document.getElementById("growthSection");
+    const g = data.growth;
+    if (!g || Object.keys(g).length === 0) { section.classList.add("hidden"); return; }
+    section.classList.remove("hidden");
+    const ctx = document.getElementById("growth");
+    if (charts.growth) charts.growth.destroy();
+    const labels = data.dates.map(d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+    const order = [["ig", "Instagram"], ["yt", "YouTube"], ["fb", "Facebook"]];
+    const datasets = order.filter(([k]) => g[k]).map(([k, name]) => ({
+      label: name, data: g[k], borderColor: COLORS[k], backgroundColor: COLORS[k] + "18",
+      borderWidth: 2, tension: .35, pointRadius: 0, fill: true,
+    }));
+    charts.growth = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "bottom", labels: { boxWidth: 10, usePointStyle: true, font: { size: 12 } } } },
+        scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 11 } } },
+                  y: { grid: { color: "#eef0f3" }, ticks: { font: { size: 11 } } } },
+      },
+    });
+  }
+
+  function renderTop(data) {
+    const el = document.getElementById("topContent");
+    if (!data.topContent) {
+      el.innerHTML = `<tr><td class="note" colspan="5">Per-post breakdown appears once Instagram, Facebook, or YouTube are connected.</td></tr>`;
+      return;
+    }
+    const rows = data.topContent.slice(); // order set by the data: top per channel
+    el.innerHTML = rows.map(r => {
+      const hasReach = r.reach && r.reach > 0;
+      const reachDisp = hasReach ? fmt.format(r.reach) : "—";
+      const rateDisp = hasReach ? ((r.eng / r.reach) * 100).toFixed(1) + "%" : "—";
+      return `<tr>
+        <td>${r.title}</td>
+        <td><span class="pill ${r.chan}">${NAMES[r.chan]}</span></td>
+        <td class="num">${reachDisp}</td>
+        <td class="num">${fmt.format(r.eng)}</td>
+        <td class="num">${rateDisp}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function renderSearch(raw) {
+    const section = document.getElementById("searchSection");
+    const s = raw && raw.search;
+    if (!s || !s.clicks) { section.classList.add("hidden"); return; }
+    section.classList.remove("hidden");
+
+    const all = raw.dates.map(d => new Date(d + "T00:00:00"));
+    const rangeDays = parseInt(document.getElementById("range").value, 10);
+    const start = Math.max(0, all.length - rangeDays);
+    const labels = all.slice(start).map(d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+    const clicks = s.clicks.slice(start), impr = s.impressions.slice(start);
+    document.getElementById("searchTotals").textContent =
+      fmt.format(clicks.reduce((a, b) => a + b, 0)) + " clicks · " +
+      fmt.format(impr.reduce((a, b) => a + b, 0)) + " impressions in this period";
+
+    const ctx = document.getElementById("searchChart");
+    if (charts.search) charts.search.destroy();
+    charts.search = new Chart(ctx, {
+      data: { labels, datasets: [
+        { type: "line", label: "Clicks", data: clicks, borderColor: "#1a73e8", backgroundColor: "#1a73e820", borderWidth: 2, tension: .35, pointRadius: 0, yAxisID: "y", fill: true },
+        { type: "line", label: "Impressions", data: impr, borderColor: "#94a3b8", borderWidth: 2, tension: .35, pointRadius: 0, yAxisID: "y1", borderDash: [4, 3] },
+      ]},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "bottom", labels: { boxWidth: 10, usePointStyle: true, font: { size: 12 } } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 11 } } },
+          y:  { position: "left",  beginAtZero: true, suggestedMax: 5, grid: { color: "#eef0f3" }, ticks: { precision: 0, font: { size: 11 } }, title: { display: true, text: "Clicks", font: { size: 10 } } },
+          y1: { position: "right", beginAtZero: true, suggestedMax: 10, grid: { display: false },  ticks: { precision: 0, font: { size: 11 } }, title: { display: true, text: "Impressions", font: { size: 10 } } },
+        },
+      },
+    });
+
+    const q = document.getElementById("searchQueries");
+    q.innerHTML = (s.queries && s.queries.length)
+      ? s.queries.map(r => `<tr>
+          <td>${r.query}</td>
+          <td class="num">${fmt.format(r.clicks)}</td>
+          <td class="num">${fmt.format(r.impressions)}</td>
+          <td class="num">${r.position.toFixed(1)}</td>
+        </tr>`).join("")
+      : `<tr><td class="note" colspan="4">No search-query data for this period yet.</td></tr>`;
+  }
+
+  function refresh() {
+    const rangeDays = parseInt(document.getElementById("range").value, 10);
+    const data = loadData(rangeDays);
+    renderKPIs(data);
+    renderTrend(data);
+    renderShare(data);
+    renderGrowth(data);
+    renderSearch(window.ENGAGEMENT_DATA);
+    renderTop(data);
+    const stamp = data.generated_at
+      ? new Date(data.generated_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })
+      : new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+    document.getElementById("foot").textContent =
+      (data.mode === "live" ? "Data last updated " : "Sample generated ") + stamp +
+      (data.mode === "live" ? "" : " · Preview layout, not real numbers.");
+  }
+
+  document.getElementById("range").addEventListener("change", refresh);
+  refresh();
+})();
+</script>
+</body>
+</html>

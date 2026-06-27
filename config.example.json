@@ -1,0 +1,24 @@
+{
+  "lookback_days": 90,
+  "meta_api_version": "v21.0",
+
+  "google_analytics": {
+    "property_id": "PASTE_YOUR_GA4_PROPERTY_ID",
+    "service_account_json": "ga4-service-account.json"
+  },
+
+  "facebook": {
+    "page_id": "PASTE_YOUR_FACEBOOK_PAGE_ID",
+    "page_access_token": "PASTE_LONG_LIVED_PAGE_ACCESS_TOKEN"
+  },
+
+  "instagram": {
+    "ig_user_id": "PASTE_INSTAGRAM_BUSINESS_ACCOUNT_ID",
+    "access_token": ""
+  },
+
+  "youtube": {
+    "oauth_client_secret_json": "youtube-oauth-client.json",
+    "token_json": "youtube_token.json"
+  }
+}

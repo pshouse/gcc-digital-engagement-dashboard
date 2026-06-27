@@ -1,0 +1,14 @@
+# Secrets — never commit these
+config.json
+ga4-service-account.json
+youtube-oauth-client.json
+youtube_token.json
+gcc-service-account.json
+netlify_token.txt
+netlify_site.json
+*.key
+*.pem
+
+# Generated data (optional to ignore)
+engagement-data.js
+engagement-data.json
