@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Gaston Community Church — Digital Engagement Dashboard</title>
+<link rel="icon" href="https://gastoncommunitychurch.com/favicon.ico" />
+<title>Gaston Community Church Digital Engagement Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js" integrity="sha384-iU8HYtnGQ8Cy4zl7gbNMOhsDTTKX02BTXptVP/vqAWIaTfM7isw76iyZCsjL2eVi" crossorigin="anonymous"></script>
 <!-- Real data, written by fetch_engagement.py. Optional: absent in preview. -->
 <script src="engagement-data.js" onerror="window.__noData=true"></script>
@@ -99,7 +100,7 @@
 <div class="wrap">
   <header class="top">
     <div>
-      <h1>Gaston Community Church — Digital Engagement</h1>
+      <h1>Gaston Community Church: Digital Engagement</h1>
       <div class="sub">
         <a href="https://gastoncommunitychurch.com" target="_blank" rel="noopener">Website</a> &middot;
         <a href="https://www.instagram.com/gaston_community_church" target="_blank" rel="noopener">Instagram</a> &middot;
@@ -304,7 +305,7 @@
       if (k.live === false) {
         return `<div class="card kpi">
           ${label}
-          <div class="value dim">&mdash;</div>
+          <div class="value dim">n/a</div>
           <div class="delta off">Not connected yet</div>
         </div>`;
       }
@@ -394,8 +395,8 @@
     const rows = data.topContent.slice(); // order set by the data: top per channel
     el.innerHTML = rows.map(r => {
       const hasReach = r.reach && r.reach > 0;
-      const reachDisp = hasReach ? fmt.format(r.reach) : "—";
-      const rateDisp = hasReach ? ((r.eng / r.reach) * 100).toFixed(1) + "%" : "—";
+      const reachDisp = hasReach ? fmt.format(r.reach) : "n/a";
+      const rateDisp = hasReach ? ((r.eng / r.reach) * 100).toFixed(1) + "%" : "n/a";
       return `<tr>
         <td>${r.title}</td>
         <td><span class="pill ${r.chan}">${NAMES[r.chan]}</span></td>
