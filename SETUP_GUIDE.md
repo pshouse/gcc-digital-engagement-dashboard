@@ -101,6 +101,52 @@ Put the client filename into `config.json` under `youtube`.
 
 ---
 
+## 5. Google Search Console (how people find you in Google)
+
+This is what fills the **Google Search visibility** panel — how often the church
+shows up in Google Search, how often people click through, and which searches
+brought them. It reuses the **same service account you made in step 1**, so there's
+no new key file to download.
+
+1. In the same Google Cloud project from step 1, search for **Google Search Console
+   API** and click **Enable**.
+2. Make sure the site is verified in Search Console. Go to
+   https://search.google.com/search-console — if you already see the church's site
+   listed, you're set. If not, add it there first (that's a separate step; tell me
+   and I'll help).
+3. Give the robot account read access: in Search Console, pick the property, then
+   **Settings → Users and permissions → Add user.** Paste the same service account
+   email from step 1.5 (`something@yourproject.iam.gserviceaccount.com`) and choose
+   permission **Restricted** — that's enough to read the performance reports.
+4. Copy the property's identifier exactly as Search Console shows it in the property
+   dropdown:
+   - a **Domain** property looks like `gastoncommunitychurch.org` — write it in
+     `config.json` as `sc-domain:gastoncommunitychurch.org`
+   - a **URL prefix** property looks like `https://www.gastoncommunitychurch.org/` —
+     write it exactly that way, trailing slash included
+
+Put that value into `config.json` under `search_console.site_url`:
+
+```json
+"search_console": {
+  "site_url": "sc-domain:gastoncommunitychurch.org",
+  "domain": "",
+  "service_account_json": ""
+}
+```
+
+Leave `service_account_json` blank to reuse the GA4 key from step 1. If you'd rather
+not look up the exact property name, you can instead leave `site_url` blank and put
+just your domain (e.g. `gastoncommunitychurch.org`) in `domain` — the script will
+list the properties the service account can see and pick the matching one,
+preferring the domain-wide property.
+
+**If it says "no matching property found"** or "could not list properties", it's
+almost always step 3 — the service account hasn't been added as a user on that
+property yet.
+
+---
+
 ## Running it
 
 Once at least one platform is configured:
@@ -110,9 +156,9 @@ pip install google-analytics-data google-auth google-auth-oauthlib google-api-py
 python fetch_engagement.py
 ```
 
-It writes `engagement-data.js`, which `dashboard.html` reads. Open `dashboard.html`
-in any browser to see your numbers. I'll also set up a scheduled task so this
-refreshes on its own.
+It writes `engagement-data.js`, which `engagement-dashboard.html` reads. Open
+`engagement-dashboard.html` in any browser to see your numbers. I'll also set up a
+scheduled task so this refreshes on its own.
 
 **Stuck on any step?** Tell me which platform and where, and I can walk you through
 it on screen.
