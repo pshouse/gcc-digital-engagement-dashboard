@@ -12,3 +12,7 @@ netlify_site.json
 # Generated data (optional to ignore)
 engagement-data.js
 engagement-data.json
+
+# Python bytecode
+__pycache__/
+*.pyc
