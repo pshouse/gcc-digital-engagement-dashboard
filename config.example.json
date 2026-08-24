@@ -7,6 +7,12 @@
     "service_account_json": "ga4-service-account.json"
   },
 
+  "search_console": {
+    "site_url": "",
+    "domain": "PASTE_YOUR_SITE_DOMAIN",
+    "service_account_json": ""
+  },
+
   "facebook": {
     "page_id": "PASTE_YOUR_FACEBOOK_PAGE_ID",
     "page_access_token": "PASTE_LONG_LIVED_PAGE_ACCESS_TOKEN"
