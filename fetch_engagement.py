@@ -78,6 +78,27 @@ def _clean_title(text, fallback, n=70):
     return t[:n] + ("…" if len(t) > n else "")
 
 
+# GA4 reports a missing page_title as "(not set)" (or an empty string), which
+# collapses every untitled page into a single meaningless row. When that
+# happens, name the page after its URL path instead.
+MISSING_TITLES = {"(not set)", "(none)", "(other)", "(page)"}
+
+
+def _page_label(title, path):
+    t = (title or "").strip()
+    if t and t.lower() not in MISSING_TITLES:
+        return _clean_title(t, "Web page")
+    seg = (path or "").split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+    for ext in (".dc.html", ".html", ".htm", ".php"):
+        if seg.lower().endswith(ext):
+            seg = seg[: -len(ext)]
+            break
+    seg = seg.replace("-", " ").replace("_", " ").strip()
+    if not seg:
+        return "Home"
+    return _clean_title(seg[:1].upper() + seg[1:], "Web page")
+
+
 # ----------------------------------------------------------------------------
 # Google Analytics 4  (Google Analytics Data API)
 # ----------------------------------------------------------------------------
@@ -482,7 +503,7 @@ def fetch_ga4_pages(cfg, dates):
     client = BetaAnalyticsDataClient(credentials=creds)
     req = RunReportRequest(
         property=f"properties/{prop}",
-        dimensions=[Dimension(name="pageTitle")],
+        dimensions=[Dimension(name="pageTitle"), Dimension(name="pagePath")],
         metrics=[Metric(name="screenPageViews"), Metric(name="engagedSessions")],
         date_ranges=[DateRange(start_date=dates[0], end_date=dates[-1])],
         order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="screenPageViews"), desc=True)],
@@ -491,12 +512,13 @@ def fetch_ga4_pages(cfg, dates):
     resp = client.run_report(req)
     out = []
     for row in resp.rows:
-        title = row.dimension_values[0].value or "(page)"
+        title = row.dimension_values[0].value
+        path = row.dimension_values[1].value
         views = int(row.metric_values[0].value)
         engaged = int(row.metric_values[1].value)
         if views <= 0:
             continue
-        out.append({"title": _clean_title(title, "Web page"), "chan": "web",
+        out.append({"title": _page_label(title, path), "chan": "web",
                     "reach": views, "eng": engaged})
     return out
 
