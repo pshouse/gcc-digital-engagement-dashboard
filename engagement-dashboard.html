@@ -175,7 +175,7 @@
     <div class="section-title">Short-form video: Shorts &amp; Reels</div>
     <div class="grid two">
       <div class="card chart-card">
-        <h3 class="tip" title="YouTube Shorts views per day, and Facebook Reels plays. Reels plays are lifetime totals credited to the day each Reel was published.">Shorts &amp; Reels views per day</h3>
+        <h3 class="tip" title="YouTube Shorts views per day, and Facebook Reels plays. Reels plays are lifetime totals credited to the day each Reel was published. When play counts are unavailable, the dashed line shows likes &amp; comments instead.">Shorts &amp; Reels views per day</h3>
         <div class="hint" id="shortTotals">Vertical video across YouTube and Facebook</div>
         <div class="chart-box sm"><canvas id="shortChart"></canvas></div>
       </div>
@@ -470,17 +470,23 @@
     const labels = data.dates.map(d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
     const datasets = [];
     const parts = [];
+    // Plot plays/views when we have them; otherwise fall back to the engagement
+    // line (dashed) so the panel still shows activity.
+    const line = (label, data, color, dashed) => ({ label, data, borderColor: color,
+      backgroundColor: color + "18", borderWidth: 2, tension: .35, pointRadius: 0,
+      fill: !dashed, borderDash: dashed ? [4, 3] : [] });
     if (sf && sf.yt) {
-      const v = sum(sf.yt.views);
+      const v = sum(sf.yt.views), e = sum(sf.yt.engagement);
       const pct = sf.ytTotalViews > 0 ? ` (${((v / sf.ytTotalViews) * 100).toFixed(0)}% of YouTube views)` : "";
-      parts.push(`${fmt.format(v)} Shorts views${pct} · ${fmt.format(sum(sf.yt.engagement))} likes, comments & shares`);
-      datasets.push({ label: "YouTube Shorts views", data: sf.yt.views, borderColor: COLORS.yt,
-        backgroundColor: COLORS.yt + "18", borderWidth: 2, tension: .35, pointRadius: 0, fill: true });
+      parts.push(`${fmt.format(v)} Shorts views${pct} · ${fmt.format(e)} likes, comments & shares`);
+      if (v > 0 || e === 0) datasets.push(line("YouTube Shorts views", sf.yt.views, COLORS.yt, false));
+      else datasets.push(line("YouTube Shorts likes & comments", sf.yt.engagement, COLORS.yt, true));
     }
     if (sf && sf.fb) {
-      parts.push(`${fmt.format(sum(sf.fb.plays))} Reels plays · ${fmt.format(sum(sf.fb.engagement))} likes & comments`);
-      datasets.push({ label: "Facebook Reels plays", data: sf.fb.plays, borderColor: COLORS.fb,
-        backgroundColor: COLORS.fb + "18", borderWidth: 2, tension: .35, pointRadius: 0, fill: true });
+      const p = sum(sf.fb.plays), e = sum(sf.fb.engagement);
+      parts.push((p > 0 ? `${fmt.format(p)} Reels plays · ` : "") + `${fmt.format(e)} Reels likes, comments & shares`);
+      if (p > 0 || e === 0) datasets.push(line("Facebook Reels plays", sf.fb.plays, COLORS.fb, false));
+      else datasets.push(line("Facebook Reels likes & comments", sf.fb.engagement, COLORS.fb, true));
     }
     document.getElementById("shortTotals").textContent =
       parts.length ? parts.join("  ·  ") : "No Shorts or Reels data in this period yet";
