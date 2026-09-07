@@ -12,7 +12,8 @@ credentials.
 | Website | Google Analytics 4 (Analytics Data API) |
 | Facebook Page | Meta Graph API — Page Insights |
 | Instagram | Meta Graph API — Instagram Insights |
-| YouTube | YouTube Analytics API |
+| YouTube (incl. Shorts) | YouTube Analytics API |
+| Facebook Reels | Meta Graph API — Page `video_reels` + `video_insights` |
 | Google Search visibility | Google Search Console API |
 
 Each platform is fetched independently, so the dashboard lights up channel by
@@ -24,6 +25,8 @@ channel as you configure them — anything not set up yet is simply skipped.
 - Engagement actions over time, by channel, plus each channel's share of the total
 - Google Search clicks & impressions
 - Audience growth — followers and subscribers
+- Short-form video — YouTube Shorts views and Facebook Reels plays per day, with
+  the top Shorts & Reels (Instagram Reels are tagged too)
 - Top performing content, sampled per channel so no channel gets buried
 
 ## How it works
@@ -142,5 +145,11 @@ engagement numbers are publicly visible — the credentials are not.
   `YOUTUBE_TOKEN_JSON` secret with its new contents.
 - **Facebook token expired** — regenerate the long-lived Page token and update the
   `CONFIG_JSON` secret.
+- **Reels show "n/a" plays** — the Page token can list Reels but not read their
+  insights. Regenerate it with `read_insights` (and `pages_read_engagement`)
+  granted; Reels engagement still counts without it.
+- **No Shorts split on YouTube** — the fetch log says "Shorts split unavailable";
+  the dashboard then shows channel totals only. The `creatorContentType`
+  dimension needs data from 2019 onward and the same read-only scopes.
 - **Changing the refresh schedule** — edit the `cron` line in
   `.github/workflows/refresh.yml`.

@@ -62,6 +62,11 @@ You'll create a Meta developer app and get a long-lived **Page access token**.
 
 Put the Page **id** and long-lived token into `config.json` under `facebook`.
 
+**Facebook Reels** are pulled with the same token: `pages_read_engagement` lists
+the Reels and their likes/comments, and `read_insights` adds the play counts shown
+in the **Short-form video** panel. If plays come back as "n/a", regenerate the
+token with `read_insights` included.
+
 ---
 
 ## 3. Instagram (@gaston_community_church)
@@ -98,6 +103,10 @@ approval), so this one uses OAuth rather than a robot account.
    access. It saves a `youtube_token.json` so you won't be asked again.
 
 Put the client filename into `config.json` under `youtube`.
+
+**YouTube Shorts** need nothing extra — the same read-only scopes let the script
+split views and engagement into Shorts vs. regular videos, so Shorts get their own
+line in the **Short-form video** panel and a "Short" badge in the top-content table.
 
 ---
 

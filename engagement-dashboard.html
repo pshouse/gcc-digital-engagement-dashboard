@@ -90,6 +90,9 @@
   .pill.ig { background: #fce7f3; color: #9d174d; }
   .pill.fb { background: #dbeafe; color: #1e3a8a; }
   .pill.yt { background: #fee2e2; color: #991b1b; }
+  td:has(.pill) { white-space: nowrap; }
+  .kind { font-size: 10px; font-weight: 600; margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+          background: #f1f5f9; color: #475569; border: 1px solid var(--line); vertical-align: 1px; letter-spacing: .02em; }
   .foot { color: var(--muted); font-size: 12px; margin-top: 26px; line-height: 1.5; }
   .hidden { display: none; }
   .tip { cursor: help; }
@@ -168,6 +171,30 @@
     </div>
   </div>
 
+  <div id="shortSection" class="hidden">
+    <div class="section-title">Short-form video: Shorts &amp; Reels</div>
+    <div class="grid two">
+      <div class="card chart-card">
+        <h3 class="tip" title="YouTube Shorts views per day, and Facebook Reels plays. Reels plays are lifetime totals credited to the day each Reel was published.">Shorts &amp; Reels views per day</h3>
+        <div class="hint" id="shortTotals">Vertical video across YouTube and Facebook</div>
+        <div class="chart-box sm"><canvas id="shortChart"></canvas></div>
+      </div>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Top Shorts &amp; Reels</th>
+              <th>Channel</th>
+              <th class="num tip" title="Plays — how many times the Short or Reel was watched.">Plays</th>
+              <th class="num tip" title="Engagement — likes and comments (plus shares on YouTube).">Eng.</th>
+            </tr>
+          </thead>
+          <tbody id="topShort"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div class="section-title">Top performing content</div>
   <div class="card">
     <table>
@@ -197,8 +224,10 @@
     web: "Engaged sessions — visits where someone actively used your site (scrolled, clicked, or stayed 10+ seconds). Source: Google Analytics.",
     ig:  "Instagram engagement — total likes + comments across your Instagram posts in this period.",
     fb:  "Facebook engagement — total reactions + comments + shares across your Facebook posts and Reels in this period.",
-    yt:  "YouTube views — total times your videos were watched in this period (all videos combined). The smaller line shows likes + comments.",
+    yt:  "YouTube views — total times your videos and Shorts were watched in this period. The smaller line shows likes + comments.",
   };
+  const KINDS = { short: "Short", reel: "Reel" };
+  const kindBadge = r => r.kind ? `<span class="kind">${KINDS[r.kind] || r.kind}</span>` : "";
   const fmt = new Intl.NumberFormat("en-US");
   const charts = {};
   const sum = a => a.reduce((x, y) => x + y, 0);
@@ -231,9 +260,21 @@
         { key: "yt",  label: "YouTube views & engagement",value: sum(series.yt),  delta: delta(series.yt),  live: true },
       ],
       growth: { ig: seed(n,18400,30,22), fb: seed(n,9600,15,6), yt: seed(n,12300,18,14) },
+      shortform: {
+        yt: { views: seed(n,140,40,2), engagement: seed(n,12,5,0) },
+        fb: { plays: seed(n,90,60,1), engagement: seed(n,8,4,0) },
+        ytTotalViews: sum(series.yt) * 3,
+      },
+      topShort: [
+        { title: "60 seconds of worship night", chan: "yt", kind: "short", plays: 2140, eng: 130 },
+        { title: "Pastor's Monday encouragement", chan: "yt", kind: "short", plays: 1320, eng: 88 },
+        { title: "Baptism Sunday highlights", chan: "fb", kind: "reel", plays: 1780, eng: 96 },
+        { title: "Kids camp recap", chan: "fb", kind: "reel", plays: 940, eng: 51 },
+        { title: "Baptism Sunday highlights", chan: "ig", kind: "reel", plays: 0, eng: 980 },
+      ],
       topContent: [
         { title: "Sunday sermon: “Hope That Holds”", chan: "yt", reach: 4820, eng: 740 },
-        { title: "Reel: Baptism Sunday highlights", chan: "ig", reach: 6100, eng: 980 },
+        { title: "Baptism Sunday highlights", chan: "ig", kind: "reel", reach: 6100, eng: 980 },
         { title: "Small Groups signup announcement", chan: "fb", reach: 3870, eng: 540 },
         { title: "GriefShare ministry page", chan: "web", reach: 1820, eng: 240 },
         { title: "Youth & Kids summer event post", chan: "ig", reach: 2600, eng: 410 },
@@ -281,10 +322,22 @@
     const growth = null;
 
     const topContent = (raw.top_content && raw.top_content.length)
-      ? raw.top_content.map(t => ({ title: t.title, chan: t.chan, reach: t.reach, eng: t.eng }))
+      ? raw.top_content.map(t => ({ title: t.title, chan: t.chan, kind: t.kind, reach: t.reach, eng: t.eng }))
       : null;
 
-    return { mode: "live", generated_at: raw.generated_at, dates, series, live, kpis, growth, topContent };
+    // Short-form video: YouTube Shorts (split out by the Analytics API) and
+    // Facebook Reels (separate Graph API edge). Either may be absent.
+    const shorts = ch.yt && ch.yt.shorts, reels = ch.fb && ch.fb.reels;
+    const shortform = (shorts || reels) ? {
+      yt: shorts ? { views: slice(shorts, "views") || zero(), engagement: slice(shorts, "engagement") || zero() } : null,
+      fb: reels ? { plays: slice(reels, "plays") || zero(), engagement: slice(reels, "engagement") || zero() } : null,
+      ytTotalViews: ytViews ? sum(ytViews) : 0,
+    } : null;
+    const topShort = (raw.top_shortform && raw.top_shortform.length)
+      ? raw.top_shortform.map(t => ({ title: t.title, chan: t.chan, kind: t.kind, plays: t.plays || 0, eng: t.eng }))
+      : [];
+
+    return { mode: "live", generated_at: raw.generated_at, dates, series, live, kpis, growth, topContent, shortform, topShort };
   }
 
   function loadData(rangeDays) {
@@ -399,12 +452,62 @@
       const rateDisp = hasReach ? ((r.eng / r.reach) * 100).toFixed(1) + "%" : "n/a";
       return `<tr>
         <td>${r.title}</td>
-        <td><span class="pill ${r.chan}">${NAMES[r.chan]}</span></td>
+        <td><span class="pill ${r.chan}">${NAMES[r.chan]}</span>${kindBadge(r)}</td>
         <td class="num">${reachDisp}</td>
         <td class="num">${fmt.format(r.eng)}</td>
         <td class="num">${rateDisp}</td>
       </tr>`;
     }).join("");
+  }
+
+  function renderShortForm(data) {
+    const section = document.getElementById("shortSection");
+    const sf = data.shortform;
+    const top = data.topShort || [];
+    if (!sf && top.length === 0) { section.classList.add("hidden"); return; }
+    section.classList.remove("hidden");
+
+    const labels = data.dates.map(d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+    const datasets = [];
+    const parts = [];
+    if (sf && sf.yt) {
+      const v = sum(sf.yt.views);
+      const pct = sf.ytTotalViews > 0 ? ` (${((v / sf.ytTotalViews) * 100).toFixed(0)}% of YouTube views)` : "";
+      parts.push(`${fmt.format(v)} Shorts views${pct} · ${fmt.format(sum(sf.yt.engagement))} likes, comments & shares`);
+      datasets.push({ label: "YouTube Shorts views", data: sf.yt.views, borderColor: COLORS.yt,
+        backgroundColor: COLORS.yt + "18", borderWidth: 2, tension: .35, pointRadius: 0, fill: true });
+    }
+    if (sf && sf.fb) {
+      parts.push(`${fmt.format(sum(sf.fb.plays))} Reels plays · ${fmt.format(sum(sf.fb.engagement))} likes & comments`);
+      datasets.push({ label: "Facebook Reels plays", data: sf.fb.plays, borderColor: COLORS.fb,
+        backgroundColor: COLORS.fb + "18", borderWidth: 2, tension: .35, pointRadius: 0, fill: true });
+    }
+    document.getElementById("shortTotals").textContent =
+      parts.length ? parts.join("  ·  ") : "No Shorts or Reels data in this period yet";
+
+    const ctx = document.getElementById("shortChart");
+    if (charts.short) charts.short.destroy();
+    charts.short = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "bottom", labels: { boxWidth: 10, usePointStyle: true, font: { size: 12 } } } },
+        scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 11 } } },
+                  y: { beginAtZero: true, grid: { color: "#eef0f3" }, ticks: { precision: 0, font: { size: 11 } } } },
+      },
+    });
+
+    const el = document.getElementById("topShort");
+    el.innerHTML = top.length
+      ? top.map(r => `<tr>
+          <td>${r.title}</td>
+          <td><span class="pill ${r.chan}">${NAMES[r.chan]}</span>${kindBadge(r)}</td>
+          <td class="num">${r.plays > 0 ? fmt.format(r.plays) : "n/a"}</td>
+          <td class="num">${fmt.format(r.eng)}</td>
+        </tr>`).join("")
+      : `<tr><td class="note" colspan="4">No Shorts or Reels published in this window.</td></tr>`;
   }
 
   function renderSearch(raw) {
@@ -460,6 +563,7 @@
     renderShare(data);
     renderGrowth(data);
     renderSearch(window.ENGAGEMENT_DATA);
+    renderShortForm(data);
     renderTop(data);
     const stamp = data.generated_at
       ? new Date(data.generated_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })

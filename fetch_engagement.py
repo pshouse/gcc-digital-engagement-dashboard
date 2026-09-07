@@ -8,7 +8,8 @@ official platform APIs and writes a single data file the dashboard reads:
     - Google Analytics 4   -> Google Analytics Data API
     - Facebook Page        -> Meta Graph API (Page Insights)
     - Instagram            -> Meta Graph API (Instagram Insights)
-    - YouTube channel      -> YouTube Analytics API
+    - YouTube channel      -> YouTube Analytics API (Shorts split out)
+    - Facebook Reels       -> Meta Graph API (Page video_reels + video_insights)
 
 No third-party aggregator, no subscription. You supply your own credentials
 in config.json (see config.example.json and SETUP_GUIDE.md).
@@ -161,6 +162,37 @@ def fetch_ga4(cfg, dates):
 # ----------------------------------------------------------------------------
 # Facebook Page Insights  (Meta Graph API)
 # ----------------------------------------------------------------------------
+def _meta_reach(ver, obj_id, token, metric):
+    """Best-effort unique reach for a post / media item via the Insights edge."""
+    import requests
+    try:
+        ir = requests.get(
+            f"https://graph.facebook.com/{ver}/{obj_id}/insights",
+            params={"metric": metric, "access_token": token}, timeout=60)
+        if ir.status_code == 200:
+            vals = ir.json().get("data", [])
+            if vals and vals[0].get("values"):
+                return int(vals[0]["values"][0].get("value") or 0)
+    except Exception:
+        pass
+    return 0
+
+
+def _reel_insights(vi):
+    """Pull (plays, reach) out of a nested video_insights expansion."""
+    found = {}
+    for m in ((vi or {}).get("data") or []):
+        vals = m.get("values") or []
+        if vals:
+            try:
+                found[m.get("name")] = int(vals[0].get("value") or 0)
+            except (TypeError, ValueError):
+                pass
+    plays = found.get("blue_reels_play_count") or found.get("fb_reels_total_plays") or 0
+    reach = found.get("post_impressions_unique") or 0
+    return plays, reach
+
+
 def fetch_facebook(cfg, dates):
     fb = cfg.get("facebook") or {}
     page_id = fb.get("page_id")
@@ -207,60 +239,88 @@ def fetch_facebook(cfg, dates):
         url = body.get("paging", {}).get("next")
         pages += 1
 
-    # Also include Facebook Reels (a separate edge; not returned by /posts).
-    reels_url = f"https://graph.facebook.com/{ver}/{page_id}/video_reels"
-    reels_params = {
-        "fields": "created_time,likes.summary(true),comments.summary(true)",
-        "limit": 100, "access_token": token,
-    }
+    # Facebook Reels live on a separate edge (not returned by /posts). Pull
+    # likes + comments AND play counts so Reels can be shown on their own.
+    # Plays are lifetime totals attributed to the day the Reel was published.
+    reels_eng = empty_series(dates)
+    reels_plays = empty_series(dates)
+    reel_records = []
     reels_found = 0
+    reels_ok = False
+    basic_fields = "created_time,title,description,likes.summary(true),comments.summary(true)"
+    insight_fields = (basic_fields + ",video_insights.metric("
+                      "blue_reels_play_count,fb_reels_total_plays,post_impressions_unique)")
+    reels_url = f"https://graph.facebook.com/{ver}/{page_id}/video_reels"
+    reels_params = {"fields": insight_fields, "limit": 100, "access_token": token}
     rpages = 0
     while reels_url and rpages < 8:
         try:
             rr = requests.get(reels_url, params=reels_params, timeout=60)
         except Exception:
             break
+        if rr.status_code != 200 and reels_params and reels_params["fields"] == insight_fields:
+            # Token can't expand video_insights -> retry once without play counts.
+            reels_params["fields"] = basic_fields
+            continue
         reels_params = None
         if rr.status_code != 200:
             break  # Reels edge unavailable for this page; skip quietly.
+        reels_ok = True
         rbody = rr.json()
         stop = False
         for reel in rbody.get("data", []):
             day = (reel.get("created_time", "") or "")[:10]
-            if day in eng:
-                likes = (reel.get("likes", {}).get("summary", {}) or {}).get("total_count", 0)
-                comm = (reel.get("comments", {}).get("summary", {}) or {}).get("total_count", 0)
-                eng[day] += int(likes) + int(comm)
-                reels_found += 1
-            elif day and day < dates[0]:
+            if day and day < dates[0]:
                 stop = True  # newest-first; past the window
+                continue
+            if day not in eng:
+                continue
+            likes = (reel.get("likes", {}).get("summary", {}) or {}).get("total_count", 0)
+            comm = (reel.get("comments", {}).get("summary", {}) or {}).get("total_count", 0)
+            re_eng = int(likes) + int(comm)
+            plays, reach = _reel_insights(reel.get("video_insights"))
+            eng[day] += re_eng
+            reels_eng[day] += re_eng
+            reels_plays[day] += plays
+            reels_found += 1
+            reel_records.append({
+                "id": reel.get("id"),
+                "title": _clean_title(reel.get("description") or reel.get("title"), "Facebook Reel"),
+                "eng": re_eng, "reach": reach or plays, "plays": plays, "kind": "reel"})
         if stop:
             break
         reels_url = rbody.get("paging", {}).get("next")
         rpages += 1
 
-    # Top posts by engagement, with per-post reach (best effort) for the table.
+    # Top content by engagement (posts and Reels compete on equal footing).
+    # Posts need one extra insights call each for reach; Reels already have it.
     records.sort(key=lambda x: x["eng"], reverse=True)
-    top = []
+    top_posts = []
     for rec in records[:5]:
         if rec["eng"] <= 0:
             break
-        reach = 0
-        try:
-            ir = requests.get(
-                f"https://graph.facebook.com/{ver}/{rec['id']}/insights",
-                params={"metric": "post_impressions_unique", "access_token": token},
-                timeout=60)
-            if ir.status_code == 200:
-                vals = ir.json().get("data", [])
-                if vals and vals[0].get("values"):
-                    reach = int(vals[0]["values"][0].get("value") or 0)
-        except Exception:
-            pass
-        top.append({"title": rec["title"], "chan": "fb", "reach": reach, "eng": rec["eng"]})
+        top_posts.append({"title": rec["title"], "chan": "fb",
+                          "reach": _meta_reach(ver, rec["id"], token, "post_impressions_unique"),
+                          "eng": rec["eng"]})
+    top_reels = [{"title": r["title"], "chan": "fb", "kind": "reel",
+                  "reach": r["reach"], "eng": r["eng"]}
+                 for r in reel_records if r["eng"] > 0]
+    top = sorted(top_posts + top_reels, key=lambda x: x["eng"], reverse=True)[:5]
 
-    print(f"  [Facebook] ok - posts ({pages} page(s)) + {reels_found} reel(s) in range")
-    return {"engagement": [eng[d] for d in dates], "top": top}
+    # Top Reels for the short-form panel, ranked by plays (then engagement).
+    reel_records.sort(key=lambda r: (r["plays"], r["eng"]), reverse=True)
+    top_short = [{"title": r["title"], "chan": "fb", "kind": "reel",
+                  "reach": r["reach"], "plays": r["plays"], "eng": r["eng"]}
+                 for r in reel_records[:3] if r["plays"] > 0 or r["eng"] > 0]
+
+    out = {"engagement": [eng[d] for d in dates], "top": top, "top_short": top_short}
+    if reels_ok:
+        out["reels"] = {"engagement": [reels_eng[d] for d in dates],
+                        "plays": [reels_plays[d] for d in dates],
+                        "count": reels_found}
+    print(f"  [Facebook] ok - posts ({pages} page(s)) + {reels_found} reel(s) in range"
+          + ("" if reels_ok else " (Reels edge unavailable)"))
+    return out
 
 
 # ----------------------------------------------------------------------------
@@ -280,8 +340,9 @@ def fetch_instagram(cfg, dates):
     eng = empty_series(dates)
 
     # Engagement = likes + comments per media item, bucketed by day.
+    # media_product_type lets us tag Reels in the top-content tables.
     url = f"https://graph.facebook.com/{ver}/{ig_id}/media"
-    params = {"fields": "timestamp,caption,like_count,comments_count",
+    params = {"fields": "timestamp,caption,like_count,comments_count,media_product_type",
               "limit": 100, "access_token": token}
     records = []  # per-media for the "top content" table
     pages = 0
@@ -298,9 +359,11 @@ def fetch_instagram(cfg, dates):
             if day in date_set:
                 me = int(m.get("like_count") or 0) + int(m.get("comments_count") or 0)
                 eng[day] += me
+                is_reel = (m.get("media_product_type") or "").upper() == "REELS"
                 records.append({"id": m.get("id"),
-                                "title": _clean_title(m.get("caption"), "Instagram post"),
-                                "eng": me})
+                                "title": _clean_title(m.get("caption"),
+                                                      "Instagram Reel" if is_reel else "Instagram post"),
+                                "eng": me, "kind": "reel" if is_reel else None})
             elif day and day < dates[0]:
                 stop = True  # media is reverse-chronological; past the window
         if stop:
@@ -310,25 +373,22 @@ def fetch_instagram(cfg, dates):
 
     result = {"engagement": [eng[d] for d in dates]}
 
-    # Top media by engagement, with per-media reach (best effort) for the table.
+    # Top media by engagement, with per-media reach (best effort) for the table,
+    # plus the top Reels for the short-form panel. Reach is looked up once per item.
     records.sort(key=lambda x: x["eng"], reverse=True)
-    top = []
-    for rec in records[:5]:
-        if rec["eng"] <= 0:
-            break
-        reach = 0
-        try:
-            ir = requests.get(
-                f"https://graph.facebook.com/{ver}/{rec['id']}/insights",
-                params={"metric": "reach", "access_token": token}, timeout=60)
-            if ir.status_code == 200:
-                vals = ir.json().get("data", [])
-                if vals and vals[0].get("values"):
-                    reach = int(vals[0]["values"][0].get("value") or 0)
-        except Exception:
-            pass
-        top.append({"title": rec["title"], "chan": "ig", "reach": reach, "eng": rec["eng"]})
-    result["top"] = top
+    reach_cache = {}
+
+    def entry(rec):
+        if rec["id"] not in reach_cache:
+            reach_cache[rec["id"]] = _meta_reach(ver, rec["id"], token, "reach")
+        e = {"title": rec["title"], "chan": "ig", "reach": reach_cache[rec["id"]], "eng": rec["eng"]}
+        if rec["kind"]:
+            e["kind"] = rec["kind"]
+        return e
+
+    result["top"] = [entry(rec) for rec in records[:5] if rec["eng"] > 0]
+    result["top_short"] = [entry(rec) for rec in
+                           [r for r in records if r["kind"] == "reel"][:3] if rec["eng"] > 0]
 
     # Reach (optional) in <=30-day chunks; non-fatal if it errors.
     try:
@@ -413,13 +473,24 @@ def fetch_youtube(cfg, dates):
             pass
 
     yta = build("youtubeAnalytics", "v2", credentials=creds)
-    resp = yta.reports().query(
-        ids="channel==MINE",
-        startDate=dates[0],
-        endDate=dates[-1],
-        metrics="views,estimatedMinutesWatched,likes,comments,shares,subscribersGained",
-        dimensions="day",
-    ).execute()
+    metrics = "views,estimatedMinutesWatched,likes,comments,shares,subscribersGained"
+
+    # Daily stats split by content type so Shorts can be reported separately.
+    # (creatorContentType == SHORTS / VIDEO_ON_DEMAND / LIVE_STREAM / STORY.)
+    # Falls back to a plain per-day query if the split is unavailable.
+    split_ok = True
+    try:
+        resp = yta.reports().query(
+            ids="channel==MINE", startDate=dates[0], endDate=dates[-1],
+            metrics=metrics, dimensions="day,creatorContentType",
+        ).execute()
+    except Exception as e:
+        print(f"  [YouTube] Shorts split unavailable ({e}); using channel totals only")
+        split_ok = False
+        resp = yta.reports().query(
+            ids="channel==MINE", startDate=dates[0], endDate=dates[-1],
+            metrics=metrics, dimensions="day",
+        ).execute()
 
     views = empty_series(dates)
     likes = empty_series(dates)
@@ -427,15 +498,26 @@ def fetch_youtube(cfg, dates):
     shares = empty_series(dates)
     subs = empty_series(dates)
     watch = empty_series(dates)
+    s_views = empty_series(dates)
+    s_eng = empty_series(dates)
+    s_watch = empty_series(dates)
     for row in resp.get("rows", []):
         day = row[0]
-        if day in views:
-            views[day] = int(row[1])
-            watch[day] = int(row[2])
-            likes[day] = int(row[3])
-            comments[day] = int(row[4])
-            shares[day] = int(row[5])
-            subs[day] = int(row[6])
+        if day not in views:
+            continue
+        ctype = row[1] if split_ok else None
+        vals = row[2:] if split_ok else row[1:]
+        v, w, lk, cm, sh, sg = (int(x) for x in vals[:6])
+        views[day] += v
+        watch[day] += w
+        likes[day] += lk
+        comments[day] += cm
+        shares[day] += sh
+        subs[day] += sg
+        if ctype == "SHORTS":
+            s_views[day] += v
+            s_watch[day] += w
+            s_eng[day] += lk + cm + sh
 
     eng = [likes[d] + comments[d] + shares[d] for d in dates]
     out = {
@@ -444,21 +526,49 @@ def fetch_youtube(cfg, dates):
         "watch_minutes": [watch[d] for d in dates],
         "subscribers_gained": [subs[d] for d in dates],
     }
+    if split_ok:
+        out["shorts"] = {
+            "views": [s_views[d] for d in dates],
+            "engagement": [s_eng[d] for d in dates],
+            "watch_minutes": [s_watch[d] for d in dates],
+        }
 
     # Top videos by views (+ titles & current subscriber count via Data API v3).
+    # The content-type dimension tags each video as a Short or a regular video.
     try:
-        topresp = yta.reports().query(
-            ids="channel==MINE", startDate=dates[0], endDate=dates[-1],
-            metrics="views,likes,comments", dimensions="video",
-            sort="-views", maxResults=5,
-        ).execute()
-        vid_rows = topresp.get("rows", [])
-        vid_ids = [r[0] for r in vid_rows]
+        try:
+            topresp = yta.reports().query(
+                ids="channel==MINE", startDate=dates[0], endDate=dates[-1],
+                metrics="views,likes,comments", dimensions="video,creatorContentType",
+                sort="-views", maxResults=50,
+            ).execute()
+            typed = True
+        except Exception:
+            topresp = yta.reports().query(
+                ids="channel==MINE", startDate=dates[0], endDate=dates[-1],
+                metrics="views,likes,comments", dimensions="video",
+                sort="-views", maxResults=5,
+            ).execute()
+            typed = False
+
+        vids = {}  # id -> {views, eng, short}
+        for r in topresp.get("rows", []):
+            vid = r[0]
+            ctype = r[1] if typed else None
+            v, lk, cm = (int(x) for x in (r[2:5] if typed else r[1:4]))
+            rec = vids.setdefault(vid, {"id": vid, "views": 0, "eng": 0, "short": False})
+            rec["views"] += v
+            rec["eng"] += lk + cm
+            rec["short"] = rec["short"] or ctype == "SHORTS"
+        ranked = sorted(vids.values(), key=lambda x: x["views"], reverse=True)
+        top_all = ranked[:5]
+        top_shorts = [x for x in ranked if x["short"]][:3]
 
         yt_data = build("youtube", "v3", credentials=creds)
         titles = {}
-        if vid_ids:
-            vresp = yt_data.videos().list(part="snippet", id=",".join(vid_ids)).execute()
+        want = list({x["id"] for x in top_all + top_shorts})
+        if want:
+            vresp = yt_data.videos().list(part="snippet", id=",".join(want)).execute()
             for item in vresp.get("items", []):
                 titles[item["id"]] = item["snippet"]["title"]
 
@@ -467,16 +577,22 @@ def fetch_youtube(cfg, dates):
         if citems:
             out["subscriber_count"] = int(citems[0]["statistics"].get("subscriberCount") or 0)
 
-        top = []
-        for r in vid_rows:
-            v = int(r[1]); lk = int(r[2]); cm = int(r[3])
-            top.append({"title": _clean_title(titles.get(r[0], "YouTube video"), "YouTube video"),
-                        "chan": "yt", "reach": v, "eng": lk + cm})
-        out["top"] = top
+        def entry(x):
+            fallback = "YouTube Short" if x["short"] else "YouTube video"
+            e = {"title": _clean_title(titles.get(x["id"], fallback), fallback),
+                 "chan": "yt", "reach": x["views"], "eng": x["eng"]}
+            if x["short"]:
+                e["kind"] = "short"
+            return e
+
+        out["top"] = [entry(x) for x in top_all]
+        out["top_short"] = [dict(entry(x), plays=x["views"]) for x in top_shorts]
     except Exception as e:
         print(f"  [YouTube] top videos / subscriber count skipped ({e})")
 
-    print(f"  [YouTube] ok - {len(resp.get('rows', []))} day rows")
+    n_short = sum(s_views.values())
+    print(f"  [YouTube] ok - {len(resp.get('rows', []))} rows"
+          + (f", {n_short} Shorts views" if split_ok else ""))
     return out
 
 
@@ -626,10 +742,13 @@ def main():
         top_content += fetch_ga4_pages(cfg, dates)[:4]
     except Exception as e:
         print(f"  [top content] web pages skipped: {e}")
+    top_short = []  # YouTube Shorts + Facebook / Instagram Reels for the short-form panel
     for ch_name in ("ig", "fb", "yt"):
-        top_content += (result["channels"].get(ch_name, {}).get("top") or [])[:3]
-        result["channels"].get(ch_name, {}).pop("top", None)  # keep channel dict clean
+        chd = result["channels"].get(ch_name, {})
+        top_content += (chd.pop("top", None) or [])[:3]   # pop: keep channel dict clean
+        top_short += (chd.pop("top_short", None) or [])[:3]
     result["top_content"] = top_content
+    result["top_shortform"] = top_short
 
     # Google Search Console (separate from the engagement channels).
     try:
