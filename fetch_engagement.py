@@ -178,6 +178,10 @@ def _meta_reach(ver, obj_id, token, metric):
     return 0
 
 
+def _norm_text(t):
+    return " ".join((t or "").split()).lower()[:120]
+
+
 def _reel_insights(vi):
     """Pull (plays, reach) out of a nested video_insights expansion."""
     found = {}
@@ -209,13 +213,18 @@ def fetch_facebook(cfg, dates):
 
     # Engagement = reactions + comments + shares on each post, bucketed by day.
     # (Page-level engagement metrics were deprecated by Meta, so we aggregate posts.)
+    # attachments{target} exposes the video id of a Reel post, so Reels returned
+    # by BOTH /posts and /video_reels can be matched up and counted once.
     url = f"https://graph.facebook.com/{ver}/{page_id}/posts"
     params = {
         "fields": "created_time,message,shares,"
-                  "reactions.summary(true),comments.summary(true)",
+                  "reactions.summary(true),comments.summary(true),"
+                  "attachments{media_type,target}",
         "since": since, "until": until, "limit": 100, "access_token": token,
     }
     records = []  # per-post for the "top content" table
+    post_by_vid = {}
+    post_by_text = {}
     pages = 0
     while url and pages < 12:
         r = requests.get(url, params=params, timeout=60)
@@ -233,9 +242,17 @@ def fetch_facebook(cfg, dates):
             shar = (post.get("shares", {}) or {}).get("count", 0)
             pe = int(react) + int(comm) + int(shar)
             eng[day] += pe
-            records.append({"id": post.get("id"),
-                            "title": _clean_title(post.get("message"), "Facebook post"),
-                            "eng": pe})
+            rec = {"id": post.get("id"),
+                   "title": _clean_title(post.get("message"), "Facebook post"),
+                   "eng": pe, "day": day}
+            records.append(rec)
+            for att in ((post.get("attachments") or {}).get("data") or []):
+                vid = ((att.get("target") or {}).get("id"))
+                if vid:
+                    post_by_vid.setdefault(vid, rec)
+            key = (day, _norm_text(post.get("message")))
+            if key[1]:
+                post_by_text.setdefault(key, rec)
         url = body.get("paging", {}).get("next")
         pages += 1
 
@@ -244,9 +261,10 @@ def fetch_facebook(cfg, dates):
     # Plays are lifetime totals attributed to the day the Reel was published.
     reels_eng = empty_series(dates)
     reels_plays = empty_series(dates)
-    reel_records = []
     reels_found = 0
+    reels_with_plays = 0
     reels_ok = False
+    probe_id = None
     basic_fields = "created_time,title,description,likes.summary(true),comments.summary(true)"
     insight_fields = (basic_fields + ",video_insights.metric("
                       "blue_reels_play_count,fb_reels_total_plays,post_impressions_unique)")
@@ -279,39 +297,60 @@ def fetch_facebook(cfg, dates):
             comm = (reel.get("comments", {}).get("summary", {}) or {}).get("total_count", 0)
             re_eng = int(likes) + int(comm)
             plays, reach = _reel_insights(reel.get("video_insights"))
-            eng[day] += re_eng
-            reels_eng[day] += re_eng
-            reels_plays[day] += plays
+            text = reel.get("description") or reel.get("title")
             reels_found += 1
-            reel_records.append({
-                "id": reel.get("id"),
-                "title": _clean_title(reel.get("description") or reel.get("title"), "Facebook Reel"),
-                "eng": re_eng, "reach": reach or plays, "plays": plays, "kind": "reel"})
+            probe_id = probe_id or reel.get("id")
+            if plays:
+                reels_with_plays += 1
+            reels_plays[day] += plays
+            # The same Reel usually also shows up in /posts (with reactions and
+            # shares). Reuse that record instead of counting it a second time.
+            rec = post_by_vid.get(reel.get("id")) or post_by_text.get((day, _norm_text(text)))
+            if rec is None:
+                eng[day] += re_eng
+                rec = {"id": reel.get("id"), "title": _clean_title(text, "Facebook Reel"),
+                       "eng": re_eng, "day": day}
+                records.append(rec)
+            rec["kind"] = "reel"
+            rec["plays"] = plays
+            rec["reach"] = reach or plays
+            reels_eng[day] += rec["eng"]
         if stop:
             break
         reels_url = rbody.get("paging", {}).get("next")
         rpages += 1
 
+    # When the Reels came back without play counts, ask for one Reel's insights
+    # directly so the log says WHY (usually the token is missing read_insights).
+    if reels_found and not reels_with_plays and probe_id:
+        try:
+            pr = requests.get(
+                f"https://graph.facebook.com/{ver}/{probe_id}/video_insights",
+                params={"metric": "blue_reels_play_count", "access_token": token}, timeout=60)
+            msg = (pr.json().get("error") or {}).get("message") if pr.status_code != 200 else "empty result"
+            print(f"  [Facebook] Reels play counts unavailable: HTTP {pr.status_code} - {msg} "
+                  "(the Page token needs read_insights)")
+        except Exception as e:
+            print(f"  [Facebook] Reels play counts unavailable ({e})")
+
     # Top content by engagement (posts and Reels compete on equal footing).
-    # Posts need one extra insights call each for reach; Reels already have it.
+    # Reach comes from the Reel insights when we have it, else one insights call.
+    def entry(rec):
+        if "reach" not in rec:
+            rec["reach"] = _meta_reach(ver, rec["id"], token, "post_impressions_unique")
+        e = {"title": rec["title"], "chan": "fb", "reach": rec["reach"], "eng": rec["eng"]}
+        if rec.get("kind"):
+            e["kind"] = rec["kind"]
+        return e
+
     records.sort(key=lambda x: x["eng"], reverse=True)
-    top_posts = []
-    for rec in records[:5]:
-        if rec["eng"] <= 0:
-            break
-        top_posts.append({"title": rec["title"], "chan": "fb",
-                          "reach": _meta_reach(ver, rec["id"], token, "post_impressions_unique"),
-                          "eng": rec["eng"]})
-    top_reels = [{"title": r["title"], "chan": "fb", "kind": "reel",
-                  "reach": r["reach"], "eng": r["eng"]}
-                 for r in reel_records if r["eng"] > 0]
-    top = sorted(top_posts + top_reels, key=lambda x: x["eng"], reverse=True)[:5]
+    top = [entry(rec) for rec in records[:5] if rec["eng"] > 0]
 
     # Top Reels for the short-form panel, ranked by plays (then engagement).
-    reel_records.sort(key=lambda r: (r["plays"], r["eng"]), reverse=True)
-    top_short = [{"title": r["title"], "chan": "fb", "kind": "reel",
-                  "reach": r["reach"], "plays": r["plays"], "eng": r["eng"]}
-                 for r in reel_records[:3] if r["plays"] > 0 or r["eng"] > 0]
+    reels = sorted((r for r in records if r.get("kind") == "reel"),
+                   key=lambda r: (r["plays"], r["eng"]), reverse=True)
+    top_short = [dict(entry(r), plays=r["plays"]) for r in reels[:3]
+                 if r["plays"] > 0 or r["eng"] > 0]
 
     out = {"engagement": [eng[d] for d in dates], "top": top, "top_short": top_short}
     if reels_ok:
