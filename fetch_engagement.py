@@ -72,6 +72,24 @@ def empty_series(dates):
     return {d: 0 for d in dates}
 
 
+def _is_shorts_type(ctype):
+    """creatorContentType comes back as 'shorts' in practice, 'SHORTS' per the docs."""
+    return str(ctype or "").replace("_", "").lower() == "shorts"
+
+
+def _iso_seconds(iso):
+    """ISO-8601 duration from the YouTube Data API (PT1M30S) -> 90."""
+    import re
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
+    if not m:
+        return 0
+    h, mi, sec = (int(x or 0) for x in m.groups())
+    return h * 3600 + mi * 60 + sec
+
+
+SHORT_MAX_SECONDS = 180  # YouTube Shorts can be up to 3 minutes
+
+
 def _clean_title(text, fallback, n=70):
     t = (text or "").strip().replace("\n", " ")
     if not t:
@@ -515,7 +533,7 @@ def fetch_youtube(cfg, dates):
     metrics = "views,estimatedMinutesWatched,likes,comments,shares,subscribersGained"
 
     # Daily stats split by content type so Shorts can be reported separately.
-    # (creatorContentType == SHORTS / VIDEO_ON_DEMAND / LIVE_STREAM / STORY.)
+    # (creatorContentType: shorts / videoOnDemand / liveStream / story.)
     # Falls back to a plain per-day query if the split is unavailable.
     split_ok = True
     try:
@@ -553,7 +571,7 @@ def fetch_youtube(cfg, dates):
         comments[day] += cm
         shares[day] += sh
         subs[day] += sg
-        if ctype == "SHORTS":
+        if _is_shorts_type(ctype):
             s_views[day] += v
             s_watch[day] += w
             s_eng[day] += lk + cm + sh
@@ -573,43 +591,33 @@ def fetch_youtube(cfg, dates):
         }
 
     # Top videos by views (+ titles & current subscriber count via Data API v3).
-    # The content-type dimension tags each video as a Short or a regular video.
+    # The Analytics API cannot combine the video and content-type dimensions,
+    # so a video counts as a Short when its Data API duration is <= 3 minutes.
     try:
-        try:
-            topresp = yta.reports().query(
-                ids="channel==MINE", startDate=dates[0], endDate=dates[-1],
-                metrics="views,likes,comments", dimensions="video,creatorContentType",
-                sort="-views", maxResults=50,
-            ).execute()
-            typed = True
-        except Exception:
-            topresp = yta.reports().query(
-                ids="channel==MINE", startDate=dates[0], endDate=dates[-1],
-                metrics="views,likes,comments", dimensions="video",
-                sort="-views", maxResults=5,
-            ).execute()
-            typed = False
-
-        vids = {}  # id -> {views, eng, short}
-        for r in topresp.get("rows", []):
-            vid = r[0]
-            ctype = r[1] if typed else None
-            v, lk, cm = (int(x) for x in (r[2:5] if typed else r[1:4]))
-            rec = vids.setdefault(vid, {"id": vid, "views": 0, "eng": 0, "short": False})
-            rec["views"] += v
-            rec["eng"] += lk + cm
-            rec["short"] = rec["short"] or ctype == "SHORTS"
-        ranked = sorted(vids.values(), key=lambda x: x["views"], reverse=True)
-        top_all = ranked[:5]
-        top_shorts = [x for x in ranked if x["short"]][:3]
+        topresp = yta.reports().query(
+            ids="channel==MINE", startDate=dates[0], endDate=dates[-1],
+            metrics="views,likes,comments", dimensions="video",
+            sort="-views", maxResults=50,
+        ).execute()
+        ranked = [{"id": r[0], "views": int(r[1]), "eng": int(r[2]) + int(r[3]), "short": False}
+                  for r in topresp.get("rows", [])]
 
         yt_data = build("youtube", "v3", credentials=creds)
         titles = {}
-        want = list({x["id"] for x in top_all + top_shorts})
-        if want:
-            vresp = yt_data.videos().list(part="snippet", id=",".join(want)).execute()
-            for item in vresp.get("items", []):
-                titles[item["id"]] = item["snippet"]["title"]
+        for i in range(0, len(ranked), 50):
+            chunk = ranked[i:i + 50]
+            vresp = yt_data.videos().list(
+                part="snippet,contentDetails", id=",".join(x["id"] for x in chunk)).execute()
+            info = {item["id"]: item for item in vresp.get("items", [])}
+            for x in chunk:
+                item = info.get(x["id"])
+                if not item:
+                    continue
+                titles[x["id"]] = item["snippet"]["title"]
+                secs = _iso_seconds(item.get("contentDetails", {}).get("duration"))
+                x["short"] = 0 < secs <= SHORT_MAX_SECONDS
+        top_all = ranked[:5]
+        top_shorts = [x for x in ranked if x["short"]][:3]
 
         cresp = yt_data.channels().list(part="statistics", mine=True).execute()
         citems = cresp.get("items", [])

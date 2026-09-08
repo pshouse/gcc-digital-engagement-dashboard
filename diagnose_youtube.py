@@ -10,22 +10,12 @@ Run locally:   python diagnose_youtube.py
 In the cloud:  Actions -> "Diagnose YouTube" -> Run workflow, then read the log.
 """
 
-import datetime as dt
 import json
 import os
-import re
 import sys
 
 import fetch_engagement as fe
-
-
-def _seconds(iso):
-    """PT1M30S -> 90."""
-    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
-    if not m:
-        return 0
-    h, mi, s = (int(x or 0) for x in m.groups())
-    return h * 3600 + mi * 60 + s
+from fetch_engagement import _iso_seconds as _seconds, _is_shorts_type, SHORT_MAX_SECONDS
 
 
 def main():
@@ -54,31 +44,32 @@ def main():
 
     # 1. Channel totals per content type.
     print("== Analytics totals by content type ==")
+    totals = []
     try:
         r = yta.reports().query(ids="channel==MINE", startDate=str(start), endDate=str(end),
                                 metrics="views,engagedViews,likes,comments",
                                 dimensions="creatorContentType").execute()
-        for row in r.get("rows", []):
+        totals = r.get("rows", [])
+        for row in totals:
             print(f"  {row[0]:<16} views={row[1]:<6} engagedViews={row[2]:<6} likes={row[3]} comments={row[4]}")
         if not r.get("rows"):
             print("  (no rows)")
     except Exception as e:
         print(f"  query failed: {e}")
 
-    # 2. Per-video Analytics rows with content type.
+    # 2. Per-video Analytics rows. (The API refuses video + creatorContentType
+    #    together, so Shorts are identified by duration below.)
     print("\n== Analytics per video (top 200 by views) ==")
     rows = []
     try:
         r = yta.reports().query(ids="channel==MINE", startDate=str(start), endDate=str(end),
                                 metrics="views,engagedViews,likes,comments",
-                                dimensions="video,creatorContentType",
-                                sort="-views", maxResults=200).execute()
+                                dimensions="video", sort="-views", maxResults=200).execute()
         rows = r.get("rows", [])
+        print(f"  {len(rows)} video(s) with activity")
     except Exception as e:
         print(f"  query failed: {e}")
-    by_vid = {}
-    for row in rows:
-        by_vid.setdefault(row[0], []).append(row)
+    by_vid = {row[0]: row for row in rows}
 
     # 3. Every upload in the window from the Data API, with duration + public views.
     print("\n== Uploads in window (Data API) vs Analytics ==")
@@ -96,7 +87,7 @@ def main():
         if not page or len(ids) >= 200:
             break
 
-    looks_short_no_rows = 0
+    n_short = n_short_views = 0
     for i in range(0, len(ids), 50):
         vr = data.videos().list(part="snippet,contentDetails,statistics",
                                 id=",".join(ids[i:i + 50])).execute()
@@ -104,24 +95,21 @@ def main():
             secs = _seconds(v["contentDetails"].get("duration"))
             public = int(v["statistics"].get("viewCount") or 0)
             title = fe._clean_title(v["snippet"]["title"], "?", 45)
-            looks_short = secs <= 180
-            arows = by_vid.get(v["id"], [])
-            types = ", ".join(f"{a[1]}={a[2]}v/{a[3]}ev" for a in arows) or "NO ANALYTICS ROWS"
-            flag = ""
-            if looks_short and not any(a[1] == "SHORTS" for a in arows):
-                flag = "  <-- looks like a Short but not reported as SHORTS"
-                if not arows:
-                    looks_short_no_rows += 1
-            print(f"  {v['id']}  {v['snippet']['publishedAt'][:10]}  {secs:>4}s  public={public:<5} "
-                  f"{title:<46} {types}{flag}")
+            is_short = 0 < secs <= SHORT_MAX_SECONDS
+            arow = by_vid.get(v["id"])
+            analytics = f"analytics={arow[1]}v/{arow[2]}ev" if arow else "no analytics rows"
+            kind = "SHORT" if is_short else ("live/upcoming" if secs == 0 else "video")
+            if is_short:
+                n_short += 1
+                n_short_views += int(arow[1]) if arow else 0
+            print(f"  {v['id']}  {v['snippet']['publishedAt'][:10]}  {secs:>5}s  {kind:<14} "
+                  f"public={public:<5} {analytics:<22} {title}")
 
-    n_short_rows = sum(1 for r in rows if r[1] == "SHORTS")
-    print(f"\nAnalytics rows tagged SHORTS: {n_short_rows}; "
-          f"short-looking uploads with no Analytics rows at all: {looks_short_no_rows}")
-    print("If public views > 0 but there are no Analytics rows, Analytics has not "
-          "recorded those views (it excludes some plays, e.g. from the channel's own "
-          "account or unlisted embeds). If rows exist but are VIDEO_ON_DEMAND, the "
-          "views came through the regular watch page, not the Shorts player.")
+    shorts_total = next((int(r[1]) for r in totals if _is_shorts_type(r[0])), 0)
+    print(f"\nShorts by duration (<= {SHORT_MAX_SECONDS}s): {n_short} upload(s), "
+          f"{n_short_views} Analytics views; Analytics 'shorts' content-type total: {shorts_total}")
+    print("Public view counts include plays Analytics filters out (e.g. from the "
+          "channel's own account), so small differences are normal.")
 
 
 if __name__ == "__main__":
