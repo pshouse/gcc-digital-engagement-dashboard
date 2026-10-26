@@ -180,38 +180,100 @@ def fetch_ga4(cfg, dates):
 # ----------------------------------------------------------------------------
 # Facebook Page Insights  (Meta Graph API)
 # ----------------------------------------------------------------------------
+# Meta retired the impression-based metrics (Nov 2025 - Jun 2026) in favor of
+# "media views" / "viewers". Each list tries the current name first and keeps
+# the older names as fallbacks, so the script works on either side of a change.
+FB_POST_REACH_METRICS = ("post_total_media_view_unique", "post_impressions_unique")
+FB_POST_VIEW_METRICS = ("post_media_view",)
+FB_REEL_PLAY_METRICS = ("blue_reels_play_count", "fb_reels_total_plays",
+                        "post_media_view", "total_video_views")
+FB_REEL_REACH_METRICS = ("post_total_media_view_unique", "post_impressions_unique",
+                         "total_video_impressions_unique")
+
+
+def _insight_values(body):
+    """{metric name: int} from an insights response (first value of each metric)."""
+    found = {}
+    for m in ((body or {}).get("data") or []):
+        vals = m.get("values") or []
+        if vals and isinstance(vals[0].get("value"), (int, float, str)):
+            try:
+                found[m.get("name")] = int(vals[0]["value"])
+            except (TypeError, ValueError):
+                pass
+    return found
+
+
+def _meta_metric(ver, obj_id, token, metrics, edge="insights", notes=None):
+    """First of `metrics` that returns data for this object, else 0.
+
+    Metrics are asked for one at a time: one retired name in a list makes Meta
+    reject the whole request. Problems are collected in `notes` for the log.
+    """
+    import requests
+    for metric in metrics:
+        try:
+            r = requests.get(f"https://graph.facebook.com/{ver}/{obj_id}/{edge}",
+                             params={"metric": metric, "access_token": token}, timeout=60)
+        except Exception as e:
+            if notes is not None:
+                notes.add(f"{edge}/{metric}: {e}")
+            continue
+        if r.status_code == 200:
+            found = _insight_values(r.json())
+            if metric in found:
+                return found[metric]
+            if notes is not None:
+                notes.add(f"{edge}/{metric}: empty")
+        elif notes is not None:
+            err = (r.json().get("error") or {}).get("message", "") if r.content else ""
+            notes.add(f"{edge}/{metric}: HTTP {r.status_code} {err[:120]}")
+    return 0
+
+
 def _meta_reach(ver, obj_id, token, metric):
     """Best-effort unique reach for a post / media item via the Insights edge."""
-    import requests
-    try:
-        ir = requests.get(
-            f"https://graph.facebook.com/{ver}/{obj_id}/insights",
-            params={"metric": metric, "access_token": token}, timeout=60)
-        if ir.status_code == 200:
-            vals = ir.json().get("data", [])
-            if vals and vals[0].get("values"):
-                return int(vals[0]["values"][0].get("value") or 0)
-    except Exception:
-        pass
-    return 0
+    metrics = (metric,) if isinstance(metric, str) else tuple(metric)
+    return _meta_metric(ver, obj_id, token, metrics)
 
 
 def _norm_text(t):
     return " ".join((t or "").split()).lower()[:120]
 
 
-def _reel_insights(vi):
-    """Pull (plays, reach) out of a nested video_insights expansion."""
+def _pick(found, names):
+    for n in names:
+        if found.get(n):
+            return found[n]
+    return 0
+
+
+def _reel_stats(ver, reel_id, post_id, token, notes, seen):
+    """(plays, reach) for one Reel.
+
+    Asks the Reel's video_insights for everything it offers (no metric filter,
+    so a renamed metric can't empty the reply), then falls back to the matching
+    Page post's insights, which carry the newer "media view" metrics.
+    """
+    import requests
     found = {}
-    for m in ((vi or {}).get("data") or []):
-        vals = m.get("values") or []
-        if vals:
-            try:
-                found[m.get("name")] = int(vals[0].get("value") or 0)
-            except (TypeError, ValueError):
-                pass
-    plays = found.get("blue_reels_play_count") or found.get("fb_reels_total_plays") or 0
-    reach = found.get("post_impressions_unique") or 0
+    try:
+        r = requests.get(f"https://graph.facebook.com/{ver}/{reel_id}/video_insights",
+                         params={"access_token": token}, timeout=60)
+        if r.status_code == 200:
+            found = _insight_values(r.json())
+            seen.update(found)
+        else:
+            err = (r.json().get("error") or {}).get("message", "") if r.content else ""
+            notes.add(f"video_insights: HTTP {r.status_code} {err[:120]}")
+    except Exception as e:
+        notes.add(f"video_insights: {e}")
+    plays = _pick(found, FB_REEL_PLAY_METRICS)
+    reach = _pick(found, FB_REEL_REACH_METRICS)
+    if post_id and not plays:
+        plays = _meta_metric(ver, post_id, token, FB_POST_VIEW_METRICS, notes=notes)
+    if post_id and not reach:
+        reach = _meta_metric(ver, post_id, token, FB_POST_REACH_METRICS, notes=notes)
     return plays, reach
 
 
@@ -282,22 +344,16 @@ def fetch_facebook(cfg, dates):
     reels_found = 0
     reels_with_plays = 0
     reels_ok = False
-    probe_id = None
-    basic_fields = "created_time,title,description,likes.summary(true),comments.summary(true)"
-    insight_fields = (basic_fields + ",video_insights.metric("
-                      "blue_reels_play_count,fb_reels_total_plays,post_impressions_unique)")
+    reel_notes, reel_metrics_seen = set(), {}
+    fields = "created_time,title,description,likes.summary(true),comments.summary(true)"
     reels_url = f"https://graph.facebook.com/{ver}/{page_id}/video_reels"
-    reels_params = {"fields": insight_fields, "limit": 100, "access_token": token}
+    reels_params = {"fields": fields, "limit": 100, "access_token": token}
     rpages = 0
     while reels_url and rpages < 8:
         try:
             rr = requests.get(reels_url, params=reels_params, timeout=60)
         except Exception:
             break
-        if rr.status_code != 200 and reels_params and reels_params["fields"] == insight_fields:
-            # Token can't expand video_insights -> retry once without play counts.
-            reels_params["fields"] = basic_fields
-            continue
         reels_params = None
         if rr.status_code != 200:
             break  # Reels edge unavailable for this page; skip quietly.
@@ -314,16 +370,16 @@ def fetch_facebook(cfg, dates):
             likes = (reel.get("likes", {}).get("summary", {}) or {}).get("total_count", 0)
             comm = (reel.get("comments", {}).get("summary", {}) or {}).get("total_count", 0)
             re_eng = int(likes) + int(comm)
-            plays, reach = _reel_insights(reel.get("video_insights"))
             text = reel.get("description") or reel.get("title")
-            reels_found += 1
-            probe_id = probe_id or reel.get("id")
-            if plays:
-                reels_with_plays += 1
-            reels_plays[day] += plays
             # The same Reel usually also shows up in /posts (with reactions and
             # shares). Reuse that record instead of counting it a second time.
             rec = post_by_vid.get(reel.get("id")) or post_by_text.get((day, _norm_text(text)))
+            plays, reach = _reel_stats(ver, reel.get("id"), rec and rec["id"], token,
+                                       reel_notes, reel_metrics_seen)
+            reels_found += 1
+            if plays:
+                reels_with_plays += 1
+            reels_plays[day] += plays
             if rec is None:
                 eng[day] += re_eng
                 rec = {"id": reel.get("id"), "title": _clean_title(text, "Facebook Reel"),
@@ -338,24 +394,19 @@ def fetch_facebook(cfg, dates):
         reels_url = rbody.get("paging", {}).get("next")
         rpages += 1
 
-    # When the Reels came back without play counts, ask for one Reel's insights
-    # directly so the log says WHY (usually the token is missing read_insights).
-    if reels_found and not reels_with_plays and probe_id:
-        try:
-            pr = requests.get(
-                f"https://graph.facebook.com/{ver}/{probe_id}/video_insights",
-                params={"metric": "blue_reels_play_count", "access_token": token}, timeout=60)
-            msg = (pr.json().get("error") or {}).get("message") if pr.status_code != 200 else "empty result"
-            print(f"  [Facebook] Reels play counts unavailable: HTTP {pr.status_code} - {msg} "
-                  "(the Page token needs read_insights)")
-        except Exception as e:
-            print(f"  [Facebook] Reels play counts unavailable ({e})")
+    # When no Reel came back with a play count, say what Meta did offer so the
+    # next metric rename can be spotted straight from the run log.
+    if reels_found and not reels_with_plays:
+        offered = ", ".join(sorted(reel_metrics_seen)) or "none"
+        print(f"  [Facebook] Reels play counts unavailable. Metrics offered: {offered}")
+        for note in sorted(reel_notes)[:8]:
+            print(f"  [Facebook]   {note}")
 
     # Top content by engagement (posts and Reels compete on equal footing).
     # Reach comes from the Reel insights when we have it, else one insights call.
     def entry(rec):
         if "reach" not in rec:
-            rec["reach"] = _meta_reach(ver, rec["id"], token, "post_impressions_unique")
+            rec["reach"] = _meta_reach(ver, rec["id"], token, FB_POST_REACH_METRICS)
         e = {"title": rec["title"], "chan": "fb", "reach": rec["reach"], "eng": rec["eng"]}
         if rec.get("kind"):
             e["kind"] = rec["kind"]
