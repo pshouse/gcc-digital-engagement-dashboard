@@ -183,7 +183,10 @@ def fetch_ga4(cfg, dates):
 # Meta retired the impression-based metrics (Nov 2025 - Jun 2026) in favor of
 # "media views" / "viewers". Each list tries the current name first and keeps
 # the older names as fallbacks, so the script works on either side of a change.
-FB_POST_REACH_METRICS = ("post_total_media_view_unique", "post_impressions_unique")
+# Last resort for reach is total views (not unique people), which is still a
+# better signal than the 0 Meta reports for some posts' unique-viewer metric.
+FB_POST_REACH_METRICS = ("post_total_media_view_unique", "post_impressions_unique",
+                         "post_media_view")
 FB_POST_VIEW_METRICS = ("post_media_view",)
 FB_REEL_PLAY_METRICS = ("blue_reels_play_count", "fb_reels_total_plays",
                         "post_media_view", "total_video_views")
@@ -205,10 +208,12 @@ def _insight_values(body):
 
 
 def _meta_metric(ver, obj_id, token, metrics, edge="insights", notes=None):
-    """First of `metrics` that returns data for this object, else 0.
+    """First of `metrics` with a non-zero value for this object, else 0.
 
     Metrics are asked for one at a time: one retired name in a list makes Meta
-    reject the whole request. Problems are collected in `notes` for the log.
+    reject the whole request. A 0 counts as "keep looking", because Meta
+    reports 0 for some metrics it no longer fills in. Problems are collected
+    in `notes` for the log.
     """
     import requests
     for metric in metrics:
@@ -221,10 +226,11 @@ def _meta_metric(ver, obj_id, token, metrics, edge="insights", notes=None):
             continue
         if r.status_code == 200:
             found = _insight_values(r.json())
-            if metric in found:
+            if found.get(metric):
                 return found[metric]
             if notes is not None:
-                notes.add(f"{edge}/{metric}: empty")
+                why = "0" if metric in found else "empty " + r.text[:120]
+                notes.add(f"{edge}/{metric}: {why}")
         elif notes is not None:
             err = (r.json().get("error") or {}).get("message", "") if r.content else ""
             notes.add(f"{edge}/{metric}: HTTP {r.status_code} {err[:120]}")
