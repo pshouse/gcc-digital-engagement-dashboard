@@ -343,6 +343,7 @@ def fetch_facebook(cfg, dates):
     reels_plays = empty_series(dates)
     reels_found = 0
     reels_with_plays = 0
+    reels_with_reach = 0
     reels_ok = False
     reel_notes, reel_metrics_seen = set(), {}
     fields = "created_time,title,description,likes.summary(true),comments.summary(true)"
@@ -379,6 +380,8 @@ def fetch_facebook(cfg, dates):
             reels_found += 1
             if plays:
                 reels_with_plays += 1
+            if reach:
+                reels_with_reach += 1
             reels_plays[day] += plays
             if rec is None:
                 eng[day] += re_eng
@@ -394,19 +397,19 @@ def fetch_facebook(cfg, dates):
         reels_url = rbody.get("paging", {}).get("next")
         rpages += 1
 
-    # When no Reel came back with a play count, say what Meta did offer so the
-    # next metric rename can be spotted straight from the run log.
-    if reels_found and not reels_with_plays:
+    # Say which metrics Meta offers for Reels, so the next metric rename can be
+    # spotted straight from the run log.
+    if reels_found:
         offered = ", ".join(sorted(reel_metrics_seen)) or "none"
-        print(f"  [Facebook] Reels play counts unavailable. Metrics offered: {offered}")
-        for note in sorted(reel_notes)[:8]:
-            print(f"  [Facebook]   {note}")
+        print(f"  [Facebook] Reels with plays: {reels_with_plays}/{reels_found}, "
+              f"with reach: {reels_with_reach}/{reels_found}. Metrics offered: {offered}")
 
     # Top content by engagement (posts and Reels compete on equal footing).
     # Reach comes from the Reel insights when we have it, else one insights call.
     def entry(rec):
         if "reach" not in rec:
-            rec["reach"] = _meta_reach(ver, rec["id"], token, FB_POST_REACH_METRICS)
+            rec["reach"] = _meta_metric(ver, rec["id"], token, FB_POST_REACH_METRICS,
+                                       notes=reel_notes)
         e = {"title": rec["title"], "chan": "fb", "reach": rec["reach"], "eng": rec["eng"]}
         if rec.get("kind"):
             e["kind"] = rec["kind"]
@@ -420,6 +423,11 @@ def fetch_facebook(cfg, dates):
                    key=lambda r: (r["plays"], r["eng"]), reverse=True)
     top_short = [dict(entry(r), plays=r["plays"]) for r in reels[:3]
                  if r["plays"] > 0 or r["eng"] > 0]
+
+    # Explain any missing plays or reach (failed metric requests, one per line).
+    if reel_notes:
+        for note in sorted(reel_notes)[:10]:
+            print(f"  [Facebook]   {note}")
 
     out = {"engagement": [eng[d] for d in dates], "top": top, "top_short": top_short}
     if reels_ok:
