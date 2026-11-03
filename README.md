@@ -74,6 +74,7 @@ dashboard.
 | Key | Meaning |
 |---|---|
 | `lookback_days` | Size of the rolling window, in days (default 90) |
+| `report_lag_days` | Days before the run date the window ends (default 3), so days the platforms haven't reported yet don't appear as a drop |
 | `meta_api_version` | Meta Graph API version, e.g. `v21.0` |
 | `google_analytics.property_id` | GA4 property ID |
 | `google_analytics.service_account_json` | Filename of the GA4 service-account key |
