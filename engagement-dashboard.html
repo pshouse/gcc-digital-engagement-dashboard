@@ -574,8 +574,12 @@
     const stamp = data.generated_at
       ? new Date(data.generated_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })
       : new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+    const lastDay = data.dates && data.dates.length
+      ? new Date(data.dates[data.dates.length - 1] + "T12:00:00").toLocaleDateString("en-US", { dateStyle: "medium" })
+      : "";
     document.getElementById("foot").textContent =
       (data.mode === "live" ? "Data last updated " : "Sample generated ") + stamp +
+      (data.mode === "live" && lastDay ? " · Data through " + lastDay + " (platforms report a few days behind)" : "") +
       (data.mode === "live" ? "" : " · Preview layout, not real numbers.");
   }
 

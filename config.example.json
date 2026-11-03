@@ -1,5 +1,6 @@
 {
   "lookback_days": 90,
+  "report_lag_days": 3,
   "meta_api_version": "v21.0",
 
   "google_analytics": {

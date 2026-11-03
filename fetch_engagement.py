@@ -37,6 +37,10 @@ OUTPUT_JS = os.path.join(HERE, "engagement-data.js")
 OUTPUT_JSON = os.path.join(HERE, "engagement-data.json")
 
 DEFAULT_LOOKBACK_DAYS = 90
+# Search Console and YouTube Analytics report two to three days behind, and the
+# run day itself is always partial. Ending the window this many days before
+# today keeps the trailing days from showing up as a false slump.
+DEFAULT_REPORT_LAG_DAYS = 3
 
 
 # ----------------------------------------------------------------------------
@@ -52,8 +56,9 @@ def load_config():
         return json.load(f)
 
 
-def date_range(days):
-    end = dt.date.today()
+def date_range(days, lag_days=DEFAULT_REPORT_LAG_DAYS):
+    """Window of `days` days ending `lag_days` before today (inclusive)."""
+    end = dt.date.today() - dt.timedelta(days=max(0, int(lag_days)))
     start = end - dt.timedelta(days=days)
     return start, end
 
@@ -820,10 +825,12 @@ def fetch_search_console(cfg, dates):
 def main():
     cfg = load_config()
     days = int(cfg.get("lookback_days", DEFAULT_LOOKBACK_DAYS))
-    start, end = date_range(days)
+    lag = int(cfg.get("report_lag_days", DEFAULT_REPORT_LAG_DAYS))
+    start, end = date_range(days, lag)
     dates = daily_buckets(start, end)
 
-    print(f"Fetching {days} days: {dates[0]} -> {dates[-1]}")
+    print(f"Fetching {days} days: {dates[0]} -> {dates[-1]} "
+          f"(ending {lag} day(s) before today so lagging APIs have reported)")
     result = {
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
         "church": "Gaston Community Church",
